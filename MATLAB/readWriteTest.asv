@@ -1,0 +1,24 @@
+clear all
+arduinoObj = serialport("COM5",115200);
+configureTerminator(arduinoObj,"CR/LF")
+flush(arduinoObj)
+i=1;
+loop = 1;
+send = input('Send (Y/N)?: ');
+write(arduinoObj,send,"uint8")
+data = readline(arduinoObj);
+cleqr
+% figure
+% if send > 0
+%     while loop
+%         ts = tic;
+%         data(i) = readline(arduinoObj);
+%         dataNum(i) = str2num(data(i));
+%         plot(dataNum)
+%         i=i+1;
+%         tf = toc(ts);
+%         if tf < 20
+%             tf = toc(ts);
+%         end
+%     end
+% end
