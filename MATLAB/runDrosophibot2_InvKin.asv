@@ -1,0 +1,771 @@
+%Clarus Goldsmith
+%West Virginia University
+% TO RECORD STRAIN, RUN 'collectDrosophibotStrain36MUX' IN ARDUINO BEFORE
+% RUNNING THIS PROGRAM
+
+clear all
+close all
+
+legNumbers = {[1 2 3], [4 5 6], [7 8 9], [10 11 12], [13 14 15 16 17], [18 19 20 21 22]};
+motorColLabels = {'LH CTr', 'LH TrF', 'LH FTi',...
+    'RH CTr', 'LH TrF', 'LH FTi',...
+    'LM CTr', 'LM TrF', 'LM FTi',...
+    'RH CTr', 'LH TrF', 'LH FTi',...
+    'LF ThC1', 'LF ThC3', 'LF CTr', 'LF TrF', 'LF FTi',...
+    'RF ThC1', 'RF ThC3', 'RF CTr', 'RF TrF', 'RF FTi'};
+
+if strcmp(computer, 'PCWIN') || strcmp(computer, 'PCWIN64')
+    U2D2Port = 'COM3';       % The port that the U2D2 is using
+    arduinoPort = "COM4";
+elseif strcmp(computer, 'GLNX86') || strcmp(computer, 'GLNXA64')
+    U2D2Port = '/dev/ttyUSB0';
+    arduinoPort = '/dev/ttyACM0';
+end
+
+numSteps = input('Desired number of steps?: ');
+numStepsSuccess = 0;
+while numStepsSuccess == 0
+    if rem(numSteps,1) == 0
+        if numSteps >= 1
+            numStepsSuccess = 1;
+        else
+            warning('Invalid entry. Must be an integer greater than or equal to 1.')
+            numSteps = input('Desired number of steps?: ');
+        end
+    else
+        warning('Invalid entry. Must be an integer.')
+        numSteps = input('Desired number of steps?: ');
+    end
+end
+
+backward = 0;
+pertYN = input('Trial with perturbation (Y/N)?: ',"s");
+pertStateSuccess = 0;
+while pertStateSuccess == 0
+    if strcmp(pertYN, 'Y') || strcmp(pertYN, 'y') || strcmp(pertYN, 'N') || strcmp(pertYN, 'n')
+        if strcmp(pertYN, 'Y') || strcmp(pertYN, 'y')
+            pert = 1;
+            pertLeg = input('What leg is going to be perturbed (1-6)?: ');
+            pertSuccess = 0;
+            while pertSuccess == 0
+                if rem(pertLeg,1) == 0
+                    if pertLeg <= 6 && pertLeg >= 1
+                        pertSuccess = 1;
+                    else
+                        warning('Invalid entry. Must be an integer between 1-6.')
+                        pertLeg = input('What leg should be perturbed (1-6)?: ');
+                    end
+                else
+                    warning('Invalid entry. Must be an integer between 1-6.')
+                    pertLeg = input('What leg should be perturbed (1-6)?: ');
+                end
+            end
+            pertStep = input('During what step should the perturbation take place?: ');
+            pertSuccess = 0;
+            while pertSuccess == 0
+                if rem(pertStep,1) == 0
+                    if pertStep <= numSteps && pertStep >= 1
+                        pertSuccess = 1;
+                    else
+                        warning('Invalid entry. Perturbation must be within step number defined by numSteps.')
+                        pertStep = input('During what step should the perturbation take place?: ');
+                    end
+                else
+                    warning('Invalid entry. Must be an integer.')
+                    pertStep = input('During what step should the perturbation take place?: ');
+                end
+            end
+        else
+            pert = 0;
+            pertStep = NaN;
+        end
+        pertStateSuccess = 1;
+    else
+        warning('Invalid entry. Must be Y/N.')
+        pertYN = input('Trial with perturbation (Y/N)?: ',"s");
+    end
+end
+if pert
+    pertRestPos = 2020;
+    pertFallPos = 1570;
+    pertRisePos = 2330;
+end
+% substrate = 'wire mesh';
+% substrate = 'anti-slip mat';
+substrate = 'sand paper';
+
+% simulationPath = "G:\Other computers\NeuroMINT Lab Computer\MATLAB\Design Drosophibot\Drosophibot 2 Alt Hind Legs\Flat\k_spring = 0\T_swing = 0.8\phi_I = 0.5\phi_C = 0.5\allVars.mat";
+% simulationPath = "C:\Users\Clarissa G\Documents\MATLAB\Design Drosophibot\Drosophibot 2 Alt Hind Legs\Flat\k_spring = 0\T_swing = 0.8\phi_I = 0.5\phi_C = 0.5\allVars.mat";
+% savePath = 'G:\Other Computers\NeuroMINT Lab Computer\MATLAB\Running Drosophibot\Trials\';
+savePath = '/home/clarusg/Documents/Drosophibot-II-Trials';
+simulationPath = '/home/clarusg/Documents/BRDF-Solver/Drosophibot 2 Alt Hind Legs/Flat/k_spring = 0/T_swing = 0.8/phi_I = 0.5/phi_C = 0.5/allVars.mat';
+
+%% Extract the goal positions based on a trial of solver data
+%Load the necessary variables from a save of the Design Drosophibot code
+vars = {'numJoints','numLegs','numSegs','n','actuator','A','thetaPlot','Tactuator','stepPeriod','stanceDuty','stepHeight','floorLevel','springK','contralateralPhase','ipsalateralPhase','bodyTranslation','configName','terrainShape'};
+load(simulationPath,vars{1:9})
+solverParams = load(simulationPath,vars{7:end});
+solverParams.solverPath = simulationPath;
+
+%Put the thetas into a big matrix where each column corresponds to the
+%appropriate servo ID + 1
+goalPositions = zeros(n,numJoints);
+goalTorques = zeros(n,numJoints);
+
+i = 1;
+for l=1:numLegs
+    for j=1:numSegs(l)
+        if norm(thetaPlot{l}(:,j)) ~= 0
+            goalPositions(:,i) = thetaPlot{l}(:,j);
+            goalTorques(:,i) = Tactuator{l}(:,j);
+            i = i+1;
+        end
+    end
+end
+stanceIDs = [];
+%Find at which timestep all legs are in stance in the kinematics data
+for t=1:length(A)/2
+    [Arows(t),~] = size(A{t});
+    if Arows(t) < 200
+        stanceIDs = [stanceIDs t];
+    end
+end
+%Use this time to identify how much the kinematics should be shifted by
+shiftAmnt = mean(stanceIDs);
+shiftAmnt = shiftAmnt-1;
+
+%Bias the goalPositions based on the calculated torques and the
+%stiffnesses
+goalPositionsBiased = goalPositions + goalTorques/actuator.k;
+
+%Convert the thetas from radians into servo bits
+%From radians to deg:
+goalPositions = goalPositions*180/pi;
+goalPositionsBiased = goalPositionsBiased*180/pi;
+%From deg to bits:
+goalPositions = goalPositions/.088;
+goalPositionsBiased = goalPositionsBiased/.088;
+goalPositions = round(goalPositions);
+goalPositionsBiased = round(goalPositionsBiased);
+goalPositions = goalPositions + 2048;
+goalPositionsBiased = goalPositionsBiased + 2048;
+
+%Find how we have to downsample the data to make sure the bandwidth will not be too fast for
+%the U2D2 to handle
+minTimeStep = 0.03;
+idealTimeStep = stepPeriod/n;
+x = ceil(minTimeStep/idealTimeStep);
+actTimeStep = idealTimeStep*x;
+
+%Actually shift the data so all legs start in the middle of stance
+goalPositions = circshift(goalPositions,shiftAmnt,1);
+goalPositionsBiased = circshift(goalPositionsBiased,shiftAmnt,1);
+
+numIters = ceil((stepPeriod*numSteps)/actTimeStep)+1; %Calculate the number of iterations based on the read/write timestep
+%Initialize indexing variables
+index = 2;
+indexCont = 2;
+servoIndex = 2;
+strainIndex = 1;
+strainStepInds = [];
+simInds = 1;
+s = 1;
+
+%Chain the goal positions together for the number of steps desired
+dxl_goal_position(1,:) = goalPositionsBiased(1,:);
+% dxl_goal_position(1,:) = goalPositions(1,:);
+ps = 0;
+while indexCont <= numIters
+    dxl_goal_position(indexCont,:) = goalPositionsBiased(index,:);
+    % dxl_goal_position(indexCont,:) = goalPositions(index,:);
+    simInds = [simInds index];
+    index = index+x;
+    if index > n
+        index = index - n;
+        s = s+1;
+        if pert
+            if s == pertStep && ps == 0
+                pertStart = indexCont;
+                pertEnd = pertStart+2;
+                ps = 1;
+            end
+        end
+    end
+    indexCont = indexCont+1;
+end
+
+if backward %If we want to walk backward, flip the goalPositions
+    dxl_goal_position = flip(dxl_goal_position);
+end
+
+strainYN = input('Record Strain (Y/N)?: ',"s");
+strainInSuccess = 0;
+while strainInSuccess == 0
+    if strcmp(strainYN, 'Y') || strcmp(strainYN, 'y') || strcmp(strainYN, 'N') || strcmp(strainYN, 'n')
+        if strcmp(strainYN, 'Y') || strcmp(strainYN, 'y')
+            strainBool = 1;
+        else
+            strainBool = 0;
+        end
+        strainInSuccess = 1;
+    else
+        warning('Invalid input. Must be Y/N.')
+        strainYN = input('Record Strain (Y/N)?: ',"s");
+    end
+end
+
+%% Run the robot trial
+stepNum = 1;
+
+if strainBool
+    %Labels for each column of the strain data
+    strainColLabels = {'LH Troch. Axial','LH Troch. Transverse', 'LH Troch. 45^{\circ}', 'LH Femur +45^{\circ}', 'LH Femur -45^{\circ}','LH Femur Axial',...
+        'RH Troch. Axial','RH Troch. Transverse', 'RH Troch. 45^{\circ}', 'RH Femur +45^{\circ}', 'RH Femur -45^{\circ}','RH Femur Axial',...
+        'LM Troch. Axial','LM Troch. Transverse', 'LM Troch. 45^{\circ}', 'LM Femur +45^{\circ}', 'LM Femur -45^{\circ}','LM Femur Axial',...
+        'RM Troch. Axial','RM Troch. Transverse', 'RM Troch. 45^{\circ}', 'RM Femur +45^{\circ}', 'RM Femur -45^{\circ}','RM Femur Axial',...
+        'LF Troch. Axial','LF Troch. Transverse', 'LF Troch. 45^{\circ}', 'LF Femur +45^{\circ}', 'LF Femur -45^{\circ}','LF Femur Axial',...
+        'RF Troch. Axial','RF Troch. Transverse', 'RF Troch. 45^{\circ}', 'RF Femur +45^{\circ}', 'RF Femur -45^{\circ}','RF Femur Axial'};
+
+    %Define the arduino serial connection information
+    arduinoObj = serialport(arduinoPort,115200);
+    configureTerminator(arduinoObj,"CR/LF");
+    flush(arduinoObj);
+end
+
+pause('on')
+lib_name = '';
+
+%Determine which specific library we need based on operating system
+if strcmp(computer, 'PCWIN')
+    lib_name = 'dxl_x86_c';
+elseif strcmp(computer, 'PCWIN64')
+    lib_name = 'dxl_x64_c';
+elseif strcmp(computer, 'GLNX86')
+    lib_name = 'libdxl_x86_c';
+elseif strcmp(computer, 'GLNXA64')
+    lib_name = 'libdxl_x64_c';
+elseif strcmp(computer, 'MACI64')
+    lib_name = 'libdxl_mac_c';
+end
+
+% Load libraries for Dynamixels
+if ~libisloaded(lib_name)
+    [notfound, warnings] = loadlibrary(lib_name, 'dynamixel_sdk.h', 'addheader', 'port_handler.h', 'addheader', 'packet_handler.h', 'addheader', 'group_sync_write.h', 'addheader', 'group_sync_read.h');
+end
+
+% Control table addresses
+ADDR_TORQUE_ENABLE          = 64;                 % Control table address is different in Dynamixel model
+ADDR_GOAL_POSITION           = 116;
+ADDR_PRESENT_POSITION       = 132;
+ADDR_PRESENT_LOAD           = 126;
+ADDR_PROFILE_VELOCITY       = 112;
+
+% Data Byte Lengths
+LEN_GOAL_POSITION       = 4;
+LEN_PRESENT_POSITION    = 4;
+LEN_PRESENT_LOAD        = 2;
+LEN_PROFILE_VELOCITY    = 4;
+
+% Protocol version
+PROTOCOL_VERSION            = 2.0;          % See which protocol version is used in the Dynamixel
+
+ids = linspace(0,numJoints-1,numJoints);
+pert_ID = numJoints;
+DXL_ID                     = ids;
+BAUDRATE                    = 1000000;
+
+TORQUE_ENABLE               = 1;            % Value for enabling the torque
+TORQUE_DISABLE              = 0;            % Value for disabling the torque
+DXL_MOVING_STATUS_THRESHOLD = 5;           % Dynamixel moving status threshold
+DXL_PROFILE_VELOCITY        = 62*2;
+
+ESC_CHARACTER               = 'e';          % Key for escaping loop
+
+COMM_SUCCESS                = 0;            % Communication Success result value
+COMM_TX_FAIL                = -1001;        % Communication Tx Failed
+
+% Initialize PortHandler Structs
+% Set the port path
+% Get methods and members of PortHandlerLinux or PortHandlerWindows
+port_num = portHandler(U2D2Port);
+
+% Initialize PacketHandler Structs
+packetHandler();
+
+% Initialize Groupsyncwrite Structs
+groupwrite_num = groupSyncWrite(port_num, PROTOCOL_VERSION, ADDR_GOAL_POSITION, LEN_GOAL_POSITION);
+
+% Initialize Groupsyncread Structs for Present Position
+groupread_num = groupSyncRead(port_num, PROTOCOL_VERSION, ADDR_PRESENT_POSITION, LEN_PRESENT_POSITION);
+groupread_num2 = groupSyncRead(port_num, PROTOCOL_VERSION, ADDR_PRESENT_LOAD, LEN_PRESENT_LOAD);
+
+
+dxl_comm_result = COMM_TX_FAIL;           % Communication result
+dxl_addparam_result = false;              % AddParam result
+dxl_getdata_result = false;               % GetParam result
+
+dxl_error = 0;                              % Dynamixel error
+%Create empty vectors for the loads and positions
+dxl_present_position = zeros(numIters,numJoints);
+dxl_present_load = zeros(numIters,numJoints);
+timeVec = zeros(1,numIters);
+timeVecInds = 1;
+timeVecStrain = zeros(1,numIters*5);
+strainDataRaw = strings(numIters*5,1);
+earlyTerm = 0;
+
+% Open the U2D2 port
+if (openPort(port_num))
+    fprintf('Succeeded to open the port!\n');
+else
+    unloadlibrary(lib_name);
+    fprintf('Failed to open the port!\n');
+    input('Press any key to terminate...\n');
+    return;
+end
+
+
+% Set U2D2 port baudrate
+if (setBaudRate(port_num, BAUDRATE))
+    fprintf('Succeeded to change the baudrate!\n');
+else
+    unloadlibrary(lib_name);
+    fprintf('Failed to change the baudrate!\n');
+    input('Press any key to terminate...\n');
+    return;
+end
+
+
+
+for i=1:numJoints
+    % Enable Dynamixel Torques
+    write1ByteTxRx(port_num, PROTOCOL_VERSION, DXL_ID(i), ADDR_TORQUE_ENABLE, TORQUE_ENABLE);
+    dxl_comm_result = getLastTxRxResult(port_num, PROTOCOL_VERSION);
+    dxl_error = getLastRxPacketError(port_num, PROTOCOL_VERSION);
+    if dxl_comm_result ~= COMM_SUCCESS
+        fprintf('%s\n', getTxRxResult(PROTOCOL_VERSION, dxl_comm_result));
+    elseif dxl_error ~= 0
+        fprintf('%s\n', getRxPacketError(PROTOCOL_VERSION, dxl_error));
+    else
+        fprintf('Dynamixel #%d has been successfully connected \n', DXL_ID(i));
+    end
+
+
+    %Set Dynamixel velocities
+    write4ByteTxRx(port_num, PROTOCOL_VERSION, DXL_ID(i), ADDR_PROFILE_VELOCITY, DXL_PROFILE_VELOCITY);
+    dxl_comm_result = getLastTxRxResult(port_num, PROTOCOL_VERSION);
+    dxl_error = getLastRxPacketError(port_num, PROTOCOL_VERSION);
+    if dxl_comm_result ~= COMM_SUCCESS
+        fprintf('%s\n', getTxRxResult(PROTOCOL_VERSION, dxl_comm_result));
+    elseif dxl_error ~= 0
+        fprintf('%s\n', getRxPacketError(PROTOCOL_VERSION, dxl_error));
+    else
+        fprintf('Set velocity in Dynamixel #%d successfully \n', DXL_ID(i));
+    end
+
+    dxl_addparam_result = groupSyncReadAddParam(groupread_num, DXL_ID(i));
+    if dxl_addparam_result ~= true
+        fprintf('[ID:%03d] groupSyncRead addparam failed', DXL_ID(i));
+        return;
+    end
+
+    dxl_addparam_result = groupSyncReadAddParam(groupread_num2, DXL_ID(i));
+    if dxl_addparam_result ~= true
+        fprintf('[ID:%03d] groupSyncRead addparam failed', DXL_ID(i));
+        return;
+    end
+end
+
+if pert
+    write1ByteTxRx(port_num, PROTOCOL_VERSION, pert_ID, ADDR_TORQUE_ENABLE, TORQUE_ENABLE);
+    dxl_comm_result = getLastTxRxResult(port_num, PROTOCOL_VERSION);
+    dxl_error = getLastRxPacketError(port_num, PROTOCOL_VERSION);
+    if dxl_comm_result ~= COMM_SUCCESS
+        fprintf('%s\n', getTxRxResult(PROTOCOL_VERSION, dxl_comm_result));
+    elseif dxl_error ~= 0
+        fprintf('%s\n', getRxPacketError(PROTOCOL_VERSION, dxl_error));
+    else
+        fprintf('Dynamixel #%d has been successfully connected \n', pert_ID);
+    end
+    write4ByteTxRx(port_num, PROTOCOL_VERSION, pert_ID, ADDR_PROFILE_VELOCITY, DXL_PROFILE_VELOCITY);
+    dxl_comm_result = getLastTxRxResult(port_num, PROTOCOL_VERSION);
+    dxl_error = getLastRxPacketError(port_num, PROTOCOL_VERSION);
+    if dxl_comm_result ~= COMM_SUCCESS
+        fprintf('%s\n', getTxRxResult(PROTOCOL_VERSION, dxl_comm_result));
+    elseif dxl_error ~= 0
+        fprintf('%s\n', getRxPacketError(PROTOCOL_VERSION, dxl_error));
+    else
+        fprintf('Set velocity in Dynamixel #%d successfully \n', pert_ID);
+    end
+end
+
+%Initialize the joints at the first position in goalPositions
+if input('Press any key to continue! (or input e to quit!)\n', 's') == ESC_CHARACTER
+    earlyTerm = 1;
+else
+    if pert
+        for i=1:numJoints+1
+            % Add Dynamixel goal position value to the Syncwrite storage
+            if i == numJoints+1
+                dxl_addparam_result = groupSyncWriteAddParam(groupwrite_num, pert_ID, typecast(int32(pertRestPos), 'uint32'), LEN_GOAL_POSITION);
+            else
+                dxl_addparam_result = groupSyncWriteAddParam(groupwrite_num, DXL_ID(i), typecast(int32(dxl_goal_position(1,i)), 'uint32'), LEN_GOAL_POSITION);
+            end
+            if dxl_addparam_result ~= true
+                fprintf('[ID:%03d] groupSyncWrite addparam failed', DXL_ID(i));
+                return;
+            end
+        end
+    else
+        for i=1:numJoints
+            % Add Dynamixel goal position value to the Syncwrite storage
+            dxl_addparam_result = groupSyncWriteAddParam(groupwrite_num, DXL_ID(i), typecast(int32(dxl_goal_position(1,i)), 'uint32'), LEN_GOAL_POSITION);
+            if dxl_addparam_result ~= true
+                fprintf('[ID:%03d] groupSyncWrite addparam failed', DXL_ID(i));
+                return;
+            end
+        end
+    end
+    groupSyncWriteTxPacket(groupwrite_num);
+    dxl_comm_result = getLastTxRxResult(port_num, PROTOCOL_VERSION);
+    if dxl_comm_result ~= COMM_SUCCESS
+        fprintf('%s\n', getTxRxResult(PROTOCOL_VERSION, dxl_comm_result));
+    end
+
+    % Clear syncwrite parameter storage
+    groupSyncWriteClearParam(groupwrite_num);
+
+    % Syncread present position
+    groupSyncReadTxRxPacket(groupread_num);
+    dxl_comm_result = getLastTxRxResult(port_num, PROTOCOL_VERSION);
+    if dxl_comm_result ~= COMM_SUCCESS
+        fprintf('%s\n', getTxRxResult(PROTOCOL_VERSION, dxl_comm_result));
+    end
+
+    %Syncread present load
+    groupSyncReadTxRxPacket(groupread_num2);
+    dxl_comm_result = getLastTxRxResult(port_num, PROTOCOL_VERSION);
+    if dxl_comm_result ~= COMM_SUCCESS
+        fprintf('%s\n', getTxRxResult(PROTOCOL_VERSION, dxl_comm_result));
+    end
+
+    % Get each Dynamixel present position and load value
+    for i=1:numJoints
+        dxl_present_position(1,i) = groupSyncReadGetData(groupread_num, DXL_ID(i), ADDR_PRESENT_POSITION, LEN_PRESENT_POSITION);
+        dxl_present_load(1,i) = groupSyncReadGetData(groupread_num2, DXL_ID(i), ADDR_PRESENT_LOAD, LEN_PRESENT_LOAD);
+    end
+end
+
+
+%Warm up tic/toc
+for ii=1:100
+    t_wus = tic;
+    t_wuf = toc(t_wus);
+end
+
+if strainBool
+    if ~earlyTerm
+        if input('Press any key to calibrate the strain gauges. (or input e to quit!)\n', 's') == ESC_CHARACTER
+            earlyTerm = 1;
+        else
+            write(arduinoObj,1,"uint8"); %Tell the arduino to start the calibration
+            
+            data = readline(arduinoObj) %Intentionally left without semicolon to report out the 'Done' provided by the Arduino script
+            loopDone = 0;
+            while loopDone == 0
+                data = readline(arduinoObj)
+                if strcmp(data,"Done.")
+                    loopDone = 1;
+                elseif isempty(data)
+                    loopDone = 1;
+                    earlyTerm = 1;
+                    warning('Calibration not completed. Check strain gauge cables on leg for disconnections/breakages.')
+                    input('Press any key to terminate...\n');
+                end
+            end
+        end
+        write(arduinoObj,0,"uint8"); %Tell the arduino to stop streaming data over Serial
+        fprintf('Strain gauge calibration complete. \n')
+    end
+    if ~earlyTerm
+        if input('Press any key to collect zero data for the strain gauges. (or input e to quit!)\n', 's') == ESC_CHARACTER
+            earlyTerm = 1;
+        else
+            write(arduinoObj,1,"uint8"); %Tell the arduino to start streaming data over Serial
+            for sd = 1:20
+                t_strs = tic;
+                %Collect 20 points of strain data to average to find where
+                %the unloaded value is
+                strainDataRawZero(sd,:) = readline(arduinoObj);
+                t_strf(sd) = toc(t_strs);
+            end
+            t_str = mean(t_strf);
+        end
+        write(arduinoObj,0,"uint8"); %Tell the arduino to stop streaming data over Serial
+        fprintf('Strain gauge zero data collected. \n')
+    end
+end
+
+if ~earlyTerm
+    if input('Press any key to run the robot! (or input e to quit!)\n', 's') == ESC_CHARACTER
+        earlyTerm = 1;
+    end
+end
+loopTime = [];
+
+%% Begin loop for running the whole stepping
+if ~earlyTerm
+    if strainBool
+        write(arduinoObj,1,"uint8"); %Tell arduino to start streaming data over Serial
+    end
+    if strainBool %If recording strain, record it to get a baseline number before moving.
+        strainDataRaw(strainIndex,:) = readline(arduinoObj);
+        timeVecStrain(strainIndex) = 0;
+        strainIndex = strainIndex + 1;
+        strainStepInds(strainIndex) = simInds(1);
+    end
+    fr = 2;
+    t_s = tic;
+    while fr <= numIters
+        t_ls = tic;
+        if pert
+            if fr == pertStart
+                for i=1:numJoints+1
+                    % Add Dynamixel goal position value to the Syncwrite storage
+                    if i == numJoints+1
+                        dxl_addparam_result = groupSyncWriteAddParam(groupwrite_num, pert_ID, typecast(int32(pertRisePos), 'uint32'), LEN_GOAL_POSITION);
+                    else
+                        dxl_addparam_result = groupSyncWriteAddParam(groupwrite_num, DXL_ID(i), typecast(int32(dxl_goal_position(fr,i)), 'uint32'), LEN_GOAL_POSITION);
+                    end
+                    if dxl_addparam_result ~= true
+                        fprintf('[ID:%03d] groupSyncWrite addparam failed', DXL_ID(i));
+                        return;
+                    end
+                end
+            elseif fr == pertEnd
+                for i=1:numJoints+1
+                    % Add Dynamixel goal position value to the Syncwrite storage
+                    if i == numJoints+1
+                        dxl_addparam_result = groupSyncWriteAddParam(groupwrite_num, pert_ID, typecast(int32(pertRestPos), 'uint32'), LEN_GOAL_POSITION);
+                    else
+                        dxl_addparam_result = groupSyncWriteAddParam(groupwrite_num, DXL_ID(i), typecast(int32(dxl_goal_position(fr,i)), 'uint32'), LEN_GOAL_POSITION);
+                    end
+                    if dxl_addparam_result ~= true
+                        fprintf('[ID:%03d] groupSyncWrite addparam failed', DXL_ID(i));
+                        return;
+                    end
+                end
+            else
+                for i=1:numJoints
+                   % Add Dynamixel goal position value to the Syncwrite storage
+                dxl_addparam_result = groupSyncWriteAddParam(groupwrite_num, DXL_ID(i), typecast(int32(dxl_goal_position(fr,i)), 'uint32'), LEN_GOAL_POSITION);
+                if dxl_addparam_result ~= true
+                    fprintf('[ID:%03d] groupSyncWrite addparam failed', DXL_ID(i));
+                    return;
+                end
+                end
+            end
+        else
+            for i=1:numJoints
+                % Add Dynamixel goal position value to the Syncwrite storage
+                dxl_addparam_result = groupSyncWriteAddParam(groupwrite_num, DXL_ID(i), typecast(int32(dxl_goal_position(fr,i)), 'uint32'), LEN_GOAL_POSITION);
+                if dxl_addparam_result ~= true
+                    fprintf('[ID:%03d] groupSyncWrite addparam failed', DXL_ID(i));
+                    return;
+                end
+            end
+        end
+
+        % Syncwrite goal position
+        groupSyncWriteTxPacket(groupwrite_num);
+        dxl_comm_result = getLastTxRxResult(port_num, PROTOCOL_VERSION);
+        if dxl_comm_result ~= COMM_SUCCESS
+            fprintf('%s\n', getTxRxResult(PROTOCOL_VERSION, dxl_comm_result));
+        end
+
+        % Clear syncwrite parameter storage
+        groupSyncWriteClearParam(groupwrite_num); 
+
+        % Syncread present position
+        groupSyncReadTxRxPacket(groupread_num);
+        dxl_comm_result = getLastTxRxResult(port_num, PROTOCOL_VERSION);
+        if dxl_comm_result ~= COMM_SUCCESS
+            fprintf('%s\n', getTxRxResult(PROTOCOL_VERSION, dxl_comm_result));
+        end
+
+        %Syncread present load
+        groupSyncReadTxRxPacket(groupread_num2);
+        dxl_comm_result = getLastTxRxResult(port_num, PROTOCOL_VERSION);
+        if dxl_comm_result ~= COMM_SUCCESS
+            fprintf('%s\n', getTxRxResult(PROTOCOL_VERSION, dxl_comm_result));
+        end
+
+        % Get each Dynamixel present position and load value
+        for i=1:numJoints
+            dxl_present_position(servoIndex,i) = groupSyncReadGetData(groupread_num, DXL_ID(i), ADDR_PRESENT_POSITION, LEN_PRESENT_POSITION);
+            dxl_present_load(servoIndex,i) = groupSyncReadGetData(groupread_num2, DXL_ID(i), ADDR_PRESENT_LOAD, LEN_PRESENT_LOAD);
+        end
+        timeVec(servoIndex) = toc(t_s);
+        timeVecInds(servoIndex) = simInds(fr);
+        servoIndex = servoIndex + 1;
+
+        t_lf = toc(t_ls);
+        while t_lf < actTimeStep
+            if strainBool %If recording strain, record it.
+                if t_lf < actTimeStep - t_str*3
+                    strainDataRaw(strainIndex,:) = readline(arduinoObj);
+                    timeVecStrain(strainIndex) = toc(t_s);
+                    strainIndex = strainIndex + 1;
+                    strainStepInds(strainIndex) = simInds(fr);
+                end
+            end
+            t_lf = toc(t_ls);
+        end
+        loopTime = [loopTime, t_lf];
+        fr = fr+1;
+    end
+end
+%% Once the trial is done, turn off the robot, post-process the data and save it
+if ~earlyTerm
+    input('Press any key to disable torques. \n')
+end
+
+% Disable each Dynamixel Torque
+for i=1:numJoints
+    write1ByteTxRx(port_num, PROTOCOL_VERSION, DXL_ID(i), ADDR_TORQUE_ENABLE, TORQUE_DISABLE);
+    dxl_comm_result = getLastTxRxResult(port_num, PROTOCOL_VERSION);
+    dxl_error = getLastRxPacketError(port_num, PROTOCOL_VERSION);
+    if dxl_comm_result ~= COMM_SUCCESS
+        fprintf('%s\n', getTxRxResult(PROTOCOL_VERSION, dxl_comm_result));
+    elseif dxl_error ~= 0
+        fprintf('%s\n', getRxPacketError(PROTOCOL_VERSION, dxl_error));
+    end
+end
+
+if pert
+    write1ByteTxRx(port_num, PROTOCOL_VERSION, pert_ID, ADDR_TORQUE_ENABLE, TORQUE_DISABLE);
+    dxl_comm_result = getLastTxRxResult(port_num, PROTOCOL_VERSION);
+    dxl_error = getLastRxPacketError(port_num, PROTOCOL_VERSION);
+    if dxl_comm_result ~= COMM_SUCCESS
+        fprintf('%s\n', getTxRxResult(PROTOCOL_VERSION, dxl_comm_result));
+    elseif dxl_error ~= 0
+        fprintf('%s\n', getRxPacketError(PROTOCOL_VERSION, dxl_error));
+    end
+end
+
+if strainBool
+    %Stop the arduino board transmitting over serial and close the port
+    write(arduinoObj,0,"uint8");
+    clear arduinoObj
+end
+
+% Close U2D2 port
+closePort(port_num);
+
+% Unload Library
+unloadlibrary(lib_name);
+
+if ~earlyTerm
+    saveBool = input('Save the current trial (1 for yes, 0 for no): ');
+    if saveBool
+
+        dxl_present_load_pp = dxl_present_load;
+        %Convert the torque values into meaningful numbers
+        for i=1:length(dxl_present_load)
+            for j=1:22
+                if dxl_present_load(i,j) > 60000
+                    dxl_present_load_pp(i,j) = dxl_present_load(i,j) - 2^16;
+                end
+            end
+        end
+
+        for k=1:22
+            if any(k == [1 4 7 10 15 20])
+                dxl_present_load_pp(:,k) = dxl_present_load_pp(:,k)/1941;
+                dxl_present_load_pp(:,k) = dxl_present_load_pp(:,k)*6;
+            else
+                dxl_present_load_pp(:,k) = dxl_present_load_pp(:,k)*.001;
+                dxl_present_load_pp(:,k) = dxl_present_load_pp(:,k)*2.5;
+            end
+        end
+
+        if strainBool
+            for k=1:length(strainDataRawZero)
+                strainDataSepZero = split(strainDataRawZero(k,:),' ')';
+                for kk=1:36
+                    strainDataRawNumsZero(k,kk) = str2double(strainDataSepZero(1,kk));
+                end
+            end
+            for k=1:length(strainDataRaw)
+                strainDataSep = split(strainDataRaw(k,:),' ')';
+                for kk=1:length(strainDataSep)
+                    strainDataRawNums(k,kk) = str2double(strainDataSep(1,kk));
+                end
+            end
+        end
+ 
+        strainDataRawNums = strainDataRawNums(:,1:36);
+        strainDataRawNumsZero = strainDataRawNumsZero(:,1:36);
+
+        trialInfo = cell(9,1);
+        if ~backward
+            trialInfo{1} = 'Forward walking';
+        else
+            trialInfo{1} = 'Backward walking';
+        end
+
+        trialInfo{2} = ['Substrate: ' substrate];
+        trialInfo{3} =  [num2str(stepPeriod) ' s step'];
+
+        if strainBool
+            trialInfo{4} = 'Strain Recorded?: Yes';
+        else
+            trialInfo{4} = 'Strain Recorded?: No';
+        end
+
+        if pert
+            trialInfo{5} = 'Perturbation?: Yes';
+            trialInfo{6} = ['Pert. Leg: ' num2str(pertLeg)];
+            trialInfo{7} = ['Pert. Step: ' num2str(pertStep)];
+        else
+            trialInfo{5} = 'Perturbation?: No';
+        end
+
+        trialInfo{8} = ['Actuator Profile Velocity: ' num2str(DXL_PROFILE_VELOCITY)];
+
+        note = input('Additional notes about this trial: ','s');
+        trialInfo{end} = ['Additional Notes: ' note];
+
+        tab = table(trialInfo);
+        date = datetime;
+        date.Format = 'yyyy-MM-dd HH_mm_ss';
+        currDate = convertStringsToChars(string(date));
+
+        mkdir(savePath,currDate)
+
+        if pert
+            if strainBool
+                save([savePath currDate '\robotData.mat'],'motorColLabels','dxl_goal_position','dxl_present_position','actTimeStep','dxl_present_load_pp','simInds','numSteps','timeVec','timeVecInds','strainDataRaw','strainDataRawNums','strainDataRawZero','strainDataRawNumsZero','timeVecStrain','strainStepInds','pertStart','pertEnd','pertLeg','pertStep','solverParams','strainColLabels')
+            else
+                save([savePath currDate '\robotDwritelines(['---- ' currDate ' ----'],[savePath '\TRIAL INDEX.txt'],WriteMode = 'append')
+        trialDesc = [trialInfo{3} '. ' trialInfo{1} '. ' note];
+        writelines(trialDesc,[savePath '\TRIAL INDEX.txt'],WriteMode = 'append')
+        writelines('   ',[savePath '\TRIAL INDEX.txt'],WriteMode = 'append')ata.mat'],'motorColLabels','dxl_goal_position','dxl_present_position','actTimeStep','dxl_present_load_pp','simInds','numSteps','timeVec','timeVecInds','pertStart','pertEnd','pertLeg','pertStep','solverParams')
+            end
+        else
+            if strainBool
+                save([savePath currDate '\robotData.mat'],'motorColLabels','dxl_goal_position','dxl_present_position','actTimeStep','dxl_present_load_pp','simInds','numSteps','timeVec','timeVecInds','strainDataRaw','strainDataRawNums','strainDataRawZero','strainDataRawNumsZero','timeVecStrain','strainStepInds','solverParams','strainColLabels')
+            else
+                save([savePath currDate '\robotData.mat'],'motorColLabels','dxl_goal_position','dxl_present_position','actTimeStep','dxl_present_load_pp','simInds','numSteps','timeVec','timeVecInds','solverParams')
+            end
+        end
+        writetable(tab,[savePath currDate '\README.txt'])
+
+        %Write trial description to the master text file
+        writelines(['---- ' currDate ' ----'],[savePath '\TRIAL INDEX.txt'],WriteMode = 'append')
+        trialDesc = [trialInfo{3} '. ' trialInfo{1} '. ' note];
+        writelines(trialDesc,[savePath '\TRIAL INDEX.txt'],WriteMode = 'append')
+        writelines('   ',[savePath '\TRIAL INDEX.txt'],WriteMode = 'append')
+    end
+end
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               
