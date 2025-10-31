@@ -42,7 +42,7 @@ void setup() {
   {
     pinMode(analogPorts[i], INPUT);
   }
-
+  
   // Wait until MATLAB code startup is complete and servos are on, then calibrate each of the strain gauges
   Serial.println("Waiting on MATLAB...");
   int waiting = 1;
@@ -60,7 +60,7 @@ void setup() {
   }
   
   // CALIBRATION CODE
-  for(int L=0;L<numAnalogPorts;L++) //FOR each each leg...
+  for(int L=0;L<numAnalogPorts;L++) //FOR each leg...
   {
     digitalWrite(I2CMUXPins[L], HIGH); // Set the appropriate pin for the I2C analog switches HIGH to direct the I2C channels to your desired leg
     for(int i=0;i<ampMUXPinNum;i++) //FOR each possible state of the switches on the amplifier board (corresponding to either "side" of the board)...
@@ -72,6 +72,15 @@ void setup() {
         int currMUXID = j+(3*i); //Calculate which strain signal ID (from 0 to 6 as notated on the amplifier boards) we're on currently based on the "side" of the board and the digipot ID
         digitalWrite(MUXPins[currMUXID], HIGH); //Set the MUX pin HIGH to connect the strain signal to that leg's dedicated analog port
         allSGValues[L][currMUXID] = analogRead(analogPorts[L]); //Collect the strain signal for that leg in the strain gage data array
+        if(allSGValues[L][currMUXID]==1023)
+        {
+          Serial.print("Gauge ");
+          Serial.print(currMUXID);
+          Serial.print(" on leg ");
+          Serial.print(L);
+          Serial.println(" is broken or unplugged. Please check the cable.");
+          exit(0);
+        }
         while(allSGValues[L][currMUXID] < targetStrainBaseline - strainBaselineErrorMargin || allSGValues[L][currMUXID] > targetStrainBaseline + strainBaselineErrorMargin) //WHILE the strain value isn't within our desired calibration range...
         {
           Wire.beginTransmission(digiPotIDs[j]); //Prepare to send a new wiper value to the digipot
@@ -94,9 +103,6 @@ void setup() {
       digitalWrite(ampMUXPins[i], LOW);
     }
     digitalWrite(I2CMUXPins[L], LOW);
-    Serial.print("Leg ");
-    Serial.print(L);
-    Serial.println(" complete.");
   }
   Serial.println("Done."); //Let MATLAB know you're done calibrating
 }

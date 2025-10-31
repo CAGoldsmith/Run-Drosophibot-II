@@ -71,6 +71,6 @@ void loop() {
   }
   //Print the carriage return to tell the MATLAB script that this is one complete timestep of data
   Serial.println(" ");
-  delay(2); 
+  delay(10); 
   }
 }
