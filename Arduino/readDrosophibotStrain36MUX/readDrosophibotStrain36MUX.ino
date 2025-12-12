@@ -1,6 +1,6 @@
 #include <Wire.h>
 float targetStrainBaseline = 300;
-float strainBaselineErrorMargin = 20;
+float strainBaselineErrorMargin = 50;
 int digiPotIDs[3] = {44,46,45}; //The three unique digipot IDs that each amplifier board uses
 int numDigiPotIDs = 3;
 int analogPorts[6] = {0, 1, 2, 3, 4, 5}; //The ports that will recieve the strain data from the amplifier boards. Each leg get a dedicated port.
@@ -61,14 +61,14 @@ void loop() {
     digitalWrite(MUXPins[i], LOW);
   }
   //Print all of the collected data as one big line in Serial with a space between each point of data. The MATLAB script can then parse this data accordingly for each leg and location.
-  for(int L=0;L<numAnalogPorts;L++)
-  {
+  //for(int L=0;L<numAnalogPorts;L++)
+  //{
     for(int i=0;i<MUXPinNum;i++)
     {
-      Serial.print(allSGValues[L][i]);
+      Serial.print(allSGValues[0][i]);
       Serial.print(" ");
     }
-  }
+  //}
   //Print the carriage return to tell the MATLAB script that this is one complete timestep of data
   Serial.println(" ");
   delay(10); 

@@ -1,6 +1,6 @@
 #include <Wire.h>
 float targetStrainBaseline = 300;
-float strainBaselineErrorMargin = 20;
+float strainBaselineErrorMargin = 75;
 int digiPotIDs[3] = {44,46,45}; //The three unique digipot IDs that each amplifier board uses
 int numDigiPotIDs = 3;
 int analogPorts[6] = {0, 1, 2, 3, 4, 5}; //The ports that will recieve the strain data from the amplifier boards. Each leg get a dedicated port.
@@ -72,6 +72,7 @@ void setup() {
         int currMUXID = j+(3*i); //Calculate which strain signal ID (from 0 to 6 as notated on the amplifier boards) we're on currently based on the "side" of the board and the digipot ID
         digitalWrite(MUXPins[currMUXID], HIGH); //Set the MUX pin HIGH to connect the strain signal to that leg's dedicated analog port
         allSGValues[L][currMUXID] = analogRead(analogPorts[L]); //Collect the strain signal for that leg in the strain gage data array
+        //Serial.println(allSGValues[L][currMUXID]);
         if(allSGValues[L][currMUXID]==1023)
         {
           Serial.print("Gauge ");
@@ -81,7 +82,9 @@ void setup() {
           Serial.println(" is broken or unplugged. Please check the cable.");
           exit(0);
         }
-        while(allSGValues[L][currMUXID] < targetStrainBaseline - strainBaselineErrorMargin || allSGValues[L][currMUXID] > targetStrainBaseline + strainBaselineErrorMargin) //WHILE the strain value isn't within our desired calibration range...
+        int num = 0;
+        int stop = 0;
+        while((allSGValues[L][currMUXID] < targetStrainBaseline - strainBaselineErrorMargin || allSGValues[L][currMUXID] > targetStrainBaseline + strainBaselineErrorMargin) && stop == 0) //WHILE the strain value isn't within our desired calibration range...
         {
           Wire.beginTransmission(digiPotIDs[j]); //Prepare to send a new wiper value to the digipot
           Wire.write(byte(0x00));
@@ -96,13 +99,29 @@ void setup() {
           Wire.write(wiperVal); //Finish sending the new wiper value to the digipot
           Wire.endTransmission();
           allSGValues[L][currMUXID] = analogRead(analogPorts[L]); //Retake the strain data to see the effect of the wiper change. Repeat until you hit the desired calibration range
+          num++;
+          if(num > 2000)
+          {
+            Serial.print("Gauge ");
+            Serial.print(currMUXID);
+            Serial.print(" on leg ");
+            Serial.print(L);
+            Serial.println(" will not calibrate. Please check the cable and board.");
+            Serial.print("Final value: ");
+            Serial.println(allSGValues[L][currMUXID]);
+            stop = 1;
+          }
         }
+        Serial.println(j);
         // Set all of the pins you set HIGH back to LOW to start the loops again
         digitalWrite(MUXPins[currMUXID], LOW);
       }
       digitalWrite(ampMUXPins[i], LOW);
     }
     digitalWrite(I2CMUXPins[L], LOW);
+    Serial.print("Leg");
+    Serial.print(L);
+    Serial.println(" complete.");
   }
   Serial.println("Done."); //Let MATLAB know you're done calibrating
 }
