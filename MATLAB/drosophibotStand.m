@@ -19,12 +19,16 @@ lib_name = '';
 
 if strcmp(computer, 'PCWIN')
     lib_name = 'dxl_x86_c';
+    DEVICENAME = 'COM3'; 
 elseif strcmp(computer, 'PCWIN64')
     lib_name = 'dxl_x64_c';
+    DEVICENAME = 'COM3';
 elseif strcmp(computer, 'GLNX86')
     lib_name = 'libdxl_x86_c';
+    DEVICENAME = '/dev/ttyUSB0';
 elseif strcmp(computer, 'GLNXA64')
     lib_name = 'libdxl_x64_c';
+    DEVICENAME = '/dev/ttyUSB0';
 elseif strcmp(computer, 'MACI64')
     lib_name = 'libdxl_mac_c';
 end
@@ -48,8 +52,6 @@ PROTOCOL_VERSION            = 2.0;          % See which protocol version is used
 ids = linspace(0,numJoints-1,numJoints);
 DXL_ID                     = ids;            % Dynamixel#1 ID: 1
 BAUDRATE                    = 1000000;
-DEVICENAME                  = 'COM3';       % Check which port is being used on your controller
-% ex) Windows: 'COM1'   Linux: '/dev/ttyUSB0' Mac: '/dev/tty.usbserial-*'
 
 TORQUE_ENABLE               = 1;            % Value for enabling the torque
 TORQUE_DISABLE              = 0;            % Value for disabling the torque
